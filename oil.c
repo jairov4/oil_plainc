@@ -23,14 +23,19 @@ typedef uint8_t bucket_bit_index_t;
 // Debe poder representar todos los indices de bucket dentro de un bitset_t
 typedef uint8_t bucket_index_t;
 
+// Debe poder representar todos los indices de un bit dentro de bitset_t
+typedef uint16_t bitset_element_index_t;
+
 // Este valor ajusta el tamano del buffer interno de un bitset
 // MAX_BUCKETS debe poder ser representable con bucket_index_t
 #define MAX_BUCKETS 10
 
 void _conformance_check_bitset(void)
 {
-	assert(MAX_BUCKETS <= MAX_OF_TYPE(bucket_index_t));
+	const size_t MAX_TOTAL_BITS = BITS_OF_TYPE(bucket_t) * MAX_BUCKETS;
+	assert(MAX_BUCKETS <= MAX_OF_TYPE(bucket_index_t)-1);
 	assert(BITS_OF_TYPE(bucket_t) <= MAX_OF_TYPE(bucket_bit_index_t));
+	assert(MAX_TOTAL_BITS <= MAX_OF_TYPE(bitset_element_index_t)-1);
 }
 
 //------------------------------------------------------------------------------
@@ -46,8 +51,9 @@ void _conformance_check_bitset(void)
 typedef uint8_t symbol_t;
 
 // Representa un estado en un NFA
-typedef uint8_t state_t;
-
+// debido a la implementacion con bitset_t, es recomendable que coincida con el
+// tipo de bitset_bit_index_t
+typedef bitset_element_index_t state_t;
 
 void _conformance_check_nfa(void)
 {
@@ -89,7 +95,7 @@ void bitset_clear(bitset_t* set)
 }
 
 // Elimina un elemento del conjunto
-void bitset_remove(bitset_t* set, size_t i)
+void bitset_remove(bitset_t* set, bitset_element_index_t i)
 {
 	assert(set->bucket_count <= MAX_BUCKETS);
 
@@ -113,14 +119,27 @@ void bitset_remove_iterator(bitset_t* set, bitset_iterator_t i)
 }
 
 // Agrega un elemento a un conjunto
-void bitset_add(bitset_t* set, size_t i)
+void bitset_add(bitset_t* set, bitset_element_index_t i)
 {
+	assert(set->bucket_count <= MAX_BUCKETS);
+
 	bucket_index_t bucket =  i / BITS_OF_TYPE(bucket_t);
 	bucket_bit_index_t bit = i % BITS_OF_TYPE(bucket_t);
 
 	assert(bucket < set->bucket_count);
 
 	set->buckets[bucket] |= (1 << bit);
+}
+
+// Agrega un elemento indicado por un iterador
+void bitset_add_iterator(bitset_t* set, bitset_iterator_t i)
+{
+	assert(set->bucket_count <= MAX_BUCKETS);
+	assert(!i.end);
+	assert(i.bucket < set->bucket_count);
+	assert(i.bit < BITS_OF_TYPE(bucket_t));
+
+	set->buckets[i.bucket] |= (1 << i.bit);
 }
 
 // Prueba si un elemento esta contenido en conjunto de bits
@@ -167,11 +186,11 @@ bool bitset_any(const bitset_t set)
 }
 
 // Obtiene el elemento apuntado por un iterador
-size_t bitset_bit(const bitset_iterator_t i)
+bitset_element_index_t bitset_element(const bitset_iterator_t i)
 {
 	assert(!i.end);
 
-	return i.bit + i.bucket*sizeof(bucket_t)*8;
+	return i.bit + i.bucket*BITS_OF_TYPE(bucket_t);
 }
 
 // Obtiene un iterador apuntando al primer elemento en un conjunto
@@ -275,6 +294,20 @@ void nfa_clear(nfa_t* nfa)
 	nfa->symbols = 0;
 }
 
+// Agrega una transition entre dos estados con un simbolo.
+// El estado destino esta representado con iterador de bitset_t.
+// La transicion es de q0 -> q1 (usando el simbolo a)
+void nfa_add_transition_bsi(nfa_t* nfa, 
+							state_t q0, 
+							bitset_iterator_t q1,
+							symbol_t a)
+{
+	size_t offset = (q0 * nfa_get_symbols(*nfa) + a);
+	bitset_add_iterator(&nfa->forward[offset], q1);
+
+	// TODO: Necesitamos backward?
+}
+
 /////////////////////////////////////////////////////////////////////////////
 // NFA UTILS
 
@@ -294,7 +327,7 @@ bool accept_sample(nfa_t nfa, const symbol_t* sample, size_t length)
 		for(j=bitset_first(current); !bitset_end(j); j=bitset_next(current, j))
 		{
 			bitset_remove_iterator(&current, j);
-			state_t state = bitset_bit(j);
+			state_t state = bitset_element(j);
 			nfa_get_sucessors(nfa, state, sym, &tmp);
 			bitset_union(&next, tmp);
 			any = true;
@@ -310,25 +343,61 @@ bool accept_sample(nfa_t nfa, const symbol_t* sample, size_t length)
 	return bitset_any(current);	
 }
 
+/////////////////////////////////////////////////////////////////////////////
+// OIL
+
 typedef struct _oil_state_t
 {
-	state_t* randomIds;
+	state_t randomIds[MAX_STATES];
 	state_t randomIdsSize;
 	state_t randomIdsUsed;
-
+	bitset_t unusedStates;
+	nfa_t* nfa;
+	bool noRandomSort;
+	bool skipBestSearch;
+	state_t statesAddedBegin;
 } oil_state_t;
 
 // Agrega estados para asegurar que el automata puede reconocer
 // la secuencia suministrada
-void coerce_match_sample(nfa_t* nfa, const symbol_t* sample, size_t length)
+void coerce_match_sample(oil_state_t* state, const symbol_t* sample, size_t length)
 {
+	assert(state->randomIdsUsed + length < state->randomIdsSize);
+		
+	// El primer estado es inicial
+	bitset_iterator_t i = bitset_first(state->unusedStates);
+	bitset_add_iterator(&state->nfa->initials, i);
+	bitset_remove_iterator(&state->unusedStates, i);
+	state->randomIds[state->randomIdsUsed] = bitset_element(i);
+	
+	state->statesAddedBegin = state->randomIdsUsed;
 
+	// añadir una transicion por cada simbolo
+	for(const symbol_t* s=sample; s<sample+length; s++)
+	{
+		// TODO: Requiere inicializar unusedStates desde antes
+		bitset_iterator_t j = bitset_next(state->unusedStates, i);
+		nfa_add_transition_bsi(state->nfa, 
+			state->randomIds[state->randomIdsUsed], // q0
+			j, // q1
+			*s // letter
+		);
+		state->randomIds[++state->randomIdsUsed] = bitset_element(j);
+		i = j;
+	}
+	
+	// el ultimo de la cadena es final
+	bitset_add_iterator(&state->nfa->finals, i);
+	state->randomIdsUsed++;
+	
+	assert(accept_sample(*state->nfa, sample, length));
 }
 
 // Realiza todas las mezclas de estados posibles
 // TODO: Mejorar esta descripcion
-void do_all_merges(nfa_t* nfa)
+void do_all_merges(oil_state_t* state)
 {
+	
 }
 
 // Algoritmo que obtiene un automata NFA que puede reconocer un conjunto de
@@ -341,19 +410,31 @@ void oil(const symbol_t* sample_buffer,
 		 nfa_t* nfa
 		 ) 
 {
+	oil_state_t state;
+	state.nfa = nfa;
+	state.randomIdsSize = MAX_STATES;
+	state.randomIdsUsed = 0;
+	state.noRandomSort = false;
+	state.skipBestSearch = false;
+	state.statesAddedBegin = 0;
+	bitset_clear(&state.unusedStates);
+
 	nfa_clear(nfa);
+
 	for(size_t i=0; i<ip_size; i++)
 	{
 		const index_t pidx = pindices[i];
 		if(!accept_sample(*nfa, &sample_buffer[pidx], sample_length))
 		{
-			coerce_match_sample(nfa, &sample_buffer[pidx], sample_length);
-			do_all_merges(nfa);
+			coerce_match_sample(&state, &sample_buffer[pidx], sample_length);
+			do_all_merges(&state);
 		}
 	}
 }
 
 int main()
 {
+	_conformance_check_bitset();
+	_conformance_check_nfa();
 	return 0;
 }
