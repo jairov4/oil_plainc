@@ -1,40 +1,87 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <assert.h>
+
+// Obtiene el maximo numero entero sin signo representable con el tipo de dato X
+#define MAX_OF_TYPE(X) ((1 << (8*sizeof(X))) - 1)
+
+// Obtiene el numero de bits que mide el tipo de dato X
+#define BITS_OF_TYPE(X) (8*sizeof(X))
 
 // Indice de una muestra en el conjunto de muestras
 typedef size_t index_t;
 
-// Letra en el alfabeto del NFA
-typedef uint8_t symbol_t;
+//------------------------------------------------------------------------------
 
 // Es un bucket del bitset
 typedef uint32_t bucket_t;
 
-// Representa un estado en un NFA
-typedef uint16_t state_t;
-
 // Debe poder representar todos los indices de bit dentro de un bucket_t
 typedef uint8_t bucket_bit_index_t;
+
+// Debe poder representar todos los indices de bucket dentro de un bitset_t
+typedef uint8_t bucket_index_t;
+
+// Este valor ajusta el tamano del buffer interno de un bitset
+// MAX_BUCKETS debe poder ser representable con bucket_index_t
+#define MAX_BUCKETS 10
+
+void _conformance_check_bitset(void)
+{
+	assert(MAX_BUCKETS <= MAX_OF_TYPE(bucket_index_t));
+	assert(BITS_OF_TYPE(bucket_t) <= MAX_OF_TYPE(bucket_bit_index_t));
+}
+
+//------------------------------------------------------------------------------
+
+// Estos valores ajustan las cantidades maximas para estados y simbolos que se 
+// usaran en el NFA. Ya que las transiciones de estado en el NFA se representan
+// con bitset_t, ajuste de tal manera que pase _conformance_check_nfa().
+// Nota: si es necesario vuelva a ajustar MAX_BUCKETS y el tipo de dato de bucket_t
+#define MAX_STATES 30
+#define MAX_SYMBOLS 254
+
+// Letra en el alfabeto del NFA
+typedef uint8_t symbol_t;
+
+// Representa un estado en un NFA
+typedef uint8_t state_t;
+
+
+void _conformance_check_nfa(void)
+{
+	assert(MAX_STATES == BITS_OF_TYPE(bucket_t) * MAX_BUCKETS - 2);
+	assert(MAX_SYMBOLS < MAX_OF_TYPE(symbol_t) - 1);
+}
+
+/////////////////////////////////////////////////////////////////////////////
+// Bitset
+// Requiere configurar:
+// - bucket_t
+// - MAX_BUCKETS
+// - bucket_bit_index_t
 
 // Conjunto de bits
 typedef struct _bitset_t
 {
-	bucket_t* buckets;
-	size_t bucket_count;
+	bucket_t buckets[MAX_BUCKETS];
+	bucket_index_t bucket_count;
 } bitset_t;
 
-// Iteratdor para 1s en un bitset
+// Iterador para elementos en un conjunto
 typedef struct _bitset_iterator_t
 {
-	size_t bit;
-	size_t bucket;
+	bucket_bit_index_t bit;
+	bucket_index_t bucket;
 	bool end;
 } bitset_iterator_t;
 
 // Elimina todos los elementos en un conjunto
 void bitset_clear(bitset_t* set)
 {
+	assert(set->bucket_count <= MAX_BUCKETS);
+
 	for(size_t i=0; i < set->bucket_count; i++)
 	{
 		set->buckets[i] = 0;
@@ -44,63 +91,75 @@ void bitset_clear(bitset_t* set)
 // Elimina un elemento del conjunto
 void bitset_remove(bitset_t* set, size_t i)
 {
-	size_t bucket = i / (8*sizeof(bucket_t));
-	size_t bit = i % (8*sizeof(bucket_t));
-	// assert(bucket < set->bucket_count);
+	assert(set->bucket_count <= MAX_BUCKETS);
+
+	bucket_index_t bucket =  i / BITS_OF_TYPE(bucket_t);
+	bucket_bit_index_t bit = i % BITS_OF_TYPE(bucket_t);
+
+	assert(bucket < set->bucket_count);
+
 	set->buckets[bucket] &= ~(1 << bit);
 }
 
 // Elimina un elemento indicado por un iterador del bitset
-void bitset_remove(bitset_t* set, bitset_iterator_t i)
+void bitset_remove_iterator(bitset_t* set, bitset_iterator_t i)
 {
-	// assert(!i.end);
-	// assert(i.bucket < set->bucket_count);
-	// assert(i.bit < 8*sizeof(bucket_t));
+	assert(set->bucket_count <= MAX_BUCKETS);
+	assert(!i.end);
+	assert(i.bucket < set->bucket_count);
+	assert(i.bit < BITS_OF_TYPE(bucket_t));
+
 	set->buckets[i.bucket] &= ~(1 << i.bit);
 }
 
 // Agrega un elemento a un conjunto
 void bitset_add(bitset_t* set, size_t i)
 {
-	size_t bucket = i / (8*sizeof(bucket_t));
-	size_t bit = i % (8*sizeof(bucket_t));
-	// assert(bucket < set->bucket_count);
+	bucket_index_t bucket =  i / BITS_OF_TYPE(bucket_t);
+	bucket_bit_index_t bit = i % BITS_OF_TYPE(bucket_t);
+
+	assert(bucket < set->bucket_count);
+
 	set->buckets[bucket] |= (1 << bit);
 }
 
 // Prueba si un elemento esta contenido en conjunto de bits
-bool bitset_contains(bitset_t* set, size_t i)
+bool bitset_contains(bitset_t set, size_t i)
 {
-	size_t bucket = i / (8*sizeof(bucket_t));
-	size_t bit = i % (8*sizeof(bucket_t));
-	// assert(bucket < set->bucket_count);
-	return (set->buckets[bucket] >> bit) & 1 ? true : false;
+	bucket_index_t bucket =  i / BITS_OF_TYPE(bucket_t);
+	bucket_bit_index_t bit = i % BITS_OF_TYPE(bucket_t);
+
+	assert(bucket < set.bucket_count);
+
+	return (set.buckets[bucket] >> bit) & 1 ? true : false;
 }
 
 // Realiza la union de dos conjuntos
-void bitset_union(bitset_t* ra, const bitset_t* b)
+void bitset_union(bitset_t* ra, const bitset_t b)
 {
-	// assert(ra->bucket_count == b->bucket_count);
-	for(size_t i=0; i < ra->bucket_count; i++)
+	assert(ra->bucket_count == b.bucket_count);
+
+	for(bucket_index_t i=0; i < ra->bucket_count; i++)
 	{
-		ra->buckets[i] |= b->buckets[i];
+		ra->buckets[i] |= b.buckets[i];
 	}
 }
 
 // Realiza la interseccion de dos conjuntos
-void bitset_intersect(bitset_t* ra, const bitset_t* b)
+void bitset_intersect(bitset_t* ra, const bitset_t b)
 {
-	// assert(ra->bucket_count == b->bucket_count);
-	for(size_t i=0; i < ra->bucket_count; i++)
+	assert(ra->bucket_count == b.bucket_count);
+
+	for(bucket_index_t i=0; i < ra->bucket_count; i++)
 	{
-		ra->buckets[i] &= b->buckets[i];
+		ra->buckets[i] &= b.buckets[i];
 	}
 }
 
 // Comprueba si existe al menos un elemento en el conjunto
 bool bitset_any(const bitset_t set)
 {
-	for(size_t i=0; i<set.bucket_count; i++)
+	for(bucket_index_t i=0; i<set.bucket_count; i++)
 	{
 		if(set.buckets[i]) return true;
 	}
@@ -110,7 +169,8 @@ bool bitset_any(const bitset_t set)
 // Obtiene el elemento apuntado por un iterador
 size_t bitset_bit(const bitset_iterator_t i)
 {
-	// assert(!i.end);
+	assert(!i.end);
+
 	return i.bit + i.bucket*sizeof(bucket_t)*8;
 }
 
@@ -133,23 +193,28 @@ bitset_iterator_t bitset_first(const bitset_t set)
 }
 
 // Avanza un iterador al siguiente elemento en el conjunto
-void bitset_next(const bitset_t set, bitset_iterator_t* r)
+bitset_iterator_t bitset_next(const bitset_t set, bitset_iterator_t r)
 {
-	for(r->bit++; r->bit < sizeof(bucket_t)*8; r->bit++)
+	assert(!r.end);
+	assert(r.bit < sizeof(bucket_t)*8);
+	assert(r.bucket < set.bucket_count);
+
+	for(r.bit++; r.bit < sizeof(bucket_t)*8; r.bit++)
 	{		
-		bucket_t b = set.buckets[r->bucket] >> r->bit;
-		if(b & 1) return;
+		bucket_t b = set.buckets[r.bucket] >> r.bit;
+		if(b & 1) return r;
 	}
 
-	for(r->bucket++; r->bucket < set.bucket_count; r->bucket++)
+	for(r.bucket++; r.bucket < set.bucket_count; r.bucket++)
 	{		
-		for(r->bit=0; r->bit<sizeof(bucket_t)*8; r->bit++)
+		for(r.bit=0; r.bit<sizeof(bucket_t)*8; r.bit++)
 		{
-			bucket_t b = set.buckets[r->bucket] >> r->bit;
-			if(b & 1) return;			
+			bucket_t b = set.buckets[r.bucket] >> r.bit;
+			if(b & 1) return r;
 		}
 	}
-	r->end = true;
+	r.end = true;
+	return r;
 }
 
 // Comprueba si un iterador ya rebaso el final del conjunto
@@ -158,32 +223,30 @@ bool bitset_end(bitset_iterator_t r)
 	return r.end;
 }
 
+/////////////////////////////////////////////////////////////////////////////
+// NFA
+// Requiere configurar
+// - <bitset>
+// - symbol_t
+// - state_t
+// - MAX_STATES
+// - MAX_SYMBOLS
+
 // Representa un Non-Deterministic Finite Automata
 typedef struct _nfa_t
 {
 	bitset_t initials;
 	bitset_t finals;
-	bitset_t forward;
-	int bucket_count;
+	bitset_t forward[MAX_STATES*MAX_SYMBOLS];
 	int states;
 	int symbols;
 } nfa_t;
 
-nfa_t out_nfa;
-nfa_t best_nfa;
-nfa_t test_nfa;
-
 // Obtiene los estados en el automata
 state_t nfa_get_states(nfa_t nfa)
 {
+	assert(nfa.states <= MAX_STATES);
 	return nfa.states;
-}
-
-// Obtiene el maximo numero de estados que puede contener la
-// representacion del automata
-state_t nfa_get_max_states(nfa_t nfa)
-{
-	return (1 << (sizeof(nfa.bucket_count)*8))  -  2;
 }
 
 // Obtiene el numero de simbolos asociado al alfabeto del automata
@@ -195,43 +258,69 @@ symbol_t nfa_get_symbols(nfa_t nfa)
 // Obtiene el conjunto de sucesores de un par estado-simbolo de un automata
 void nfa_get_sucessors(nfa_t nfa, state_t state, symbol_t sym, bitset_t* bs)
 {
-	bs->bucket_count = nfa.bucket_count;
-	size_t offset = (state * nfa_get_symbols(nfa) + sym)*bs->bucket_count;
-	bs->buckets = nfa.forward.buckets[offset];
+	size_t offset = (state * nfa_get_symbols(nfa) + sym);
+	*bs = nfa.forward[offset];
 }
+
+// Inicializa un NFA de manera que queda sin estados ni transiciones
+void nfa_clear(nfa_t* nfa)
+{
+	bitset_clear(&nfa->initials);
+	bitset_clear(&nfa->finals);
+	for(size_t i=0; i<MAX_STATES*MAX_SYMBOLS; i++)
+	{
+		bitset_clear(&nfa->forward[i]);		
+	}
+	nfa->states = 0;
+	nfa->symbols = 0;
+}
+
+/////////////////////////////////////////////////////////////////////////////
+// NFA UTILS
 
 // Comprueba si el automata reconoce la secuencia suministrada
 bool accept_sample(nfa_t nfa, const symbol_t* sample, size_t length)
 {
-	bitset_t* next;
-	bitset_t* current;
+	bitset_t next;
+	bitset_t current;
 	bitset_t tmp;
 	
 	for(size_t i=0; i<length; i++)
 	{
 		symbol_t sym = *sample++;
-		bitset_clear(next);
+		bitset_clear(&next);
 		bool any = false;
 		bitset_iterator_t j;
-		for(j=bitset_first(current); !bitset_end(j); bitset_next(current, &j))
+		for(j=bitset_first(current); !bitset_end(j); j=bitset_next(current, j))
 		{
-			bitset_remove(current, j);
+			bitset_remove_iterator(&current, j);
 			state_t state = bitset_bit(j);
-			nfa_get_sucessors(&nfa, state, sym, &tmp);
-			bitset_union(next, &tmp);
+			nfa_get_sucessors(nfa, state, sym, &tmp);
+			bitset_union(&next, tmp);
 			any = true;
 		}
 		if(!any) return false;
-		swap(&next, &current);
+		// swap
+		tmp = next;
+		next = current;
+		current = tmp;
 	}
 
-	bitset_intersect(current, &nfa.finals);
+	bitset_intersect(&current, nfa.finals);
 	return bitset_any(current);	
 }
 
+typedef struct _oil_state_t
+{
+	state_t* randomIds;
+	state_t randomIdsSize;
+	state_t randomIdsUsed;
+
+} oil_state_t;
+
 // Agrega estados para asegurar que el automata puede reconocer
 // la secuencia suministrada
-void coerce_match_sample(nfa_t* nfa, const sample_t* sample, size_t length)
+void coerce_match_sample(nfa_t* nfa, const symbol_t* sample, size_t length)
 {
 
 }
@@ -244,20 +333,22 @@ void do_all_merges(nfa_t* nfa)
 
 // Algoritmo que obtiene un automata NFA que puede reconocer un conjunto de
 // secuencias y rechazar otro.
-void oil(const sample_t* sample_buffer, 
+void oil(const symbol_t* sample_buffer, 
 		 const size_t sample_buffer_size,
 		 const size_t sample_length,
 		 const index_t* pindices, size_t ip_size, 
-		 const index_t* nindices, size_t in_size
+		 const index_t* nindices, size_t in_size,
+		 nfa_t* nfa
 		 ) 
 {
+	nfa_clear(nfa);
 	for(size_t i=0; i<ip_size; i++)
 	{
 		const index_t pidx = pindices[i];
-		if(!accept_sample(out_nfa, &sample_buffer[pidx], sample_length))
+		if(!accept_sample(*nfa, &sample_buffer[pidx], sample_length))
 		{
-			coerce_match_sample(&out_nfa, &sample_buffer[pidx], sample_length);
-			do_all_merges(&out_nfa);
+			coerce_match_sample(nfa, &sample_buffer[pidx], sample_length);
+			do_all_merges(nfa);
 		}
 	}
 }
