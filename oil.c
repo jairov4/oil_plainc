@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <string.h>
 #include <assert.h>
 
 // Obtiene el maximo numero entero sin signo representable con el tipo de dato X
@@ -257,6 +258,7 @@ typedef struct _nfa_t
 	bitset_t initials;
 	bitset_t finals;
 	bitset_t forward[MAX_STATES*MAX_SYMBOLS];
+	bitset_t backward[MAX_STATES*MAX_SYMBOLS];
 	int states;
 	int symbols;
 } nfa_t;
@@ -266,6 +268,36 @@ state_t nfa_get_states(nfa_t nfa)
 {
 	assert(nfa.states <= MAX_STATES);
 	return nfa.states;
+}
+
+void nfa_add_initial(nfa_t* nfa, state_t q)
+{
+	bitset_add(&nfa->initials, q);
+}
+
+void nfa_remove_initial(nfa_t* nfa, state_t q)
+{
+	bitset_remove(&nfa->initials, q);
+}
+
+bool nfa_is_initial(nfa_t nfa, state_t q)
+{
+	return bitset_contains(nfa.initials, q);
+}
+
+void nfa_add_final(nfa_t* nfa, state_t q)
+{
+	bitset_add(&nfa->finals, q);
+}
+
+void nfa_remove_final(nfa_t* nfa, state_t q)
+{
+	bitset_remove(&nfa->finals, q);
+}
+
+bool nfa_is_final(nfa_t nfa, state_t q)
+{
+	return bitset_contains(nfa.finals, q);
 }
 
 // Obtiene el numero de simbolos asociado al alfabeto del automata
@@ -281,6 +313,13 @@ void nfa_get_sucessors(nfa_t nfa, state_t state, symbol_t sym, bitset_t* bs)
 	*bs = nfa.forward[offset];
 }
 
+// Obtiene el conjunto de predecesores de un par estado-simbolo de un automata
+void nfa_get_predecessors(nfa_t nfa, state_t state, symbol_t sym, bitset_t* bs)
+{
+	size_t offset = (state * nfa_get_symbols(nfa) + sym);
+	*bs = nfa.backward[offset];
+}
+
 // Inicializa un NFA de manera que queda sin estados ni transiciones
 void nfa_clear(nfa_t* nfa)
 {
@@ -288,7 +327,8 @@ void nfa_clear(nfa_t* nfa)
 	bitset_clear(&nfa->finals);
 	for(size_t i=0; i<MAX_STATES*MAX_SYMBOLS; i++)
 	{
-		bitset_clear(&nfa->forward[i]);		
+		bitset_clear(&nfa->forward[i]);
+		bitset_clear(&nfa->backward[i]);
 	}
 	nfa->states = 0;
 	nfa->symbols = 0;
@@ -297,15 +337,74 @@ void nfa_clear(nfa_t* nfa)
 // Agrega una transition entre dos estados con un simbolo.
 // El estado destino esta representado con iterador de bitset_t.
 // La transicion es de q0 -> q1 (usando el simbolo a)
-void nfa_add_transition_bsi(nfa_t* nfa, 
+void nfa_add_transition(nfa_t* nfa, 
 							state_t q0, 
-							bitset_iterator_t q1,
+							state_t q1,
 							symbol_t a)
 {
-	size_t offset = (q0 * nfa_get_symbols(*nfa) + a);
-	bitset_add_iterator(&nfa->forward[offset], q1);
+	size_t offset;
+	// successor
+	offset = q0 * nfa_get_symbols(*nfa) + a;
+	bitset_add(&nfa->forward[offset], q1);
+	// predecessor
+	offset = q1 * nfa_get_symbols(*nfa) + a;
+	bitset_add(&nfa->backward[offset], q0);
+}
 
-	// TODO: Necesitamos backward?
+// Elimina una transition entre dos estados con un simbolo.
+// El estado destino esta representado con iterador de bitset_t.
+// La transicion era de q0 -> q1 (usando el simbolo a)
+void nfa_remove_transition(nfa_t* nfa, 
+							state_t q0, 
+							state_t q1,
+							symbol_t a)
+{
+	size_t offset;
+	// successor
+	offset = q0 * nfa_get_symbols(*nfa) + a;
+	bitset_remove(&nfa->forward[offset], q1);
+	// predecessor
+	offset = q1 * nfa_get_symbols(*nfa) + a;
+	bitset_remove(&nfa->backward[offset], q0);
+}
+
+// Copia el NFA de fuente en destino
+void nfa_clone(nfa_t* dest, const nfa_t* src)
+{
+	*dest = *src;
+}
+
+// Combina dos estados en un automata, el estado Q2 queda aislado
+void nfa_merge_states(nfa_t* nfa, state_t q1, state_t q2)
+{
+	if(nfa_is_initial(*nfa, q2))
+	{
+		nfa_add_initial(nfa, q1);
+		nfa_remove_initial(nfa, q2);
+	}
+	if(nfa_is_final(*nfa, q2))
+	{
+		nfa_add_final(nfa, q1);
+		nfa_remove_final(nfa, q2);
+	}
+	for(symbol_t c=0; c<nfa->symbols; c++)
+	{	
+		bitset_t bs;
+
+		nfa_get_predecessors(*nfa, q2, c, &bs);
+		for(bitset_iterator_t i=bitset_first(bs); !bitset_end(i); i=bitset_next(bs, i))
+		{
+			nfa_add_transition(nfa, bitset_element(i), q1, c);
+			nfa_remove_transition(nfa, bitset_element(i), q2, c);
+		}
+		
+		nfa_get_sucessors(*nfa, q2, c, &bs);
+		for(bitset_iterator_t i=bitset_first(bs); !bitset_end(i); i=bitset_next(bs, i))
+		{
+			nfa_add_transition(nfa, q1, bitset_element(i), c);
+			nfa_remove_transition(nfa, q2, bitset_element(i), c);
+		}		
+	}
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -343,6 +442,62 @@ bool accept_sample(nfa_t nfa, const symbol_t* sample, size_t length)
 	return bitset_any(current);	
 }
 
+// Indica si e NFA acepta al menos una muestra
+bool accept_any_sample(nfa_t nfa, 
+		const symbol_t* sample_buffer,
+		const size_t sample_buffer_length,
+		const size_t sample_length,
+		const index_t* indices, const size_t i_size)
+{
+	for(size_t i=0; i<i_size; i++)
+	{
+		assert(indices[i] < sample_buffer_length);
+		if(accept_sample(nfa, sample_buffer + indices[i], sample_length))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+// Indica si el NFA acepta todas las muestras
+bool accept_all_samples(nfa_t nfa, 
+		const symbol_t* sample_buffer,
+		const size_t sample_buffer_length,
+		const size_t sample_length,
+		const index_t* indices, const size_t i_size)
+{
+	for(size_t i=0; i<i_size; i++)
+	{
+		assert(indices[i] < sample_buffer_length);
+		if(!accept_sample(nfa, sample_buffer + indices[i], sample_length))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+// Indica cuantas muestras el NFA acepta
+int accept_samples(nfa_t nfa,
+		const symbol_t* sample_buffer,
+		const size_t sample_buffer_length,
+		const size_t sample_length,
+		const index_t* indices, const size_t i_size)
+{
+	int c = 0;
+	for(size_t i=0; i<i_size; i++)
+	{
+		assert(indices[i] < sample_buffer_length);
+		if(accept_sample(nfa, sample_buffer + indices[i], sample_length))
+		{
+			c++;
+		}
+	}
+	return c;
+}
+
+
 /////////////////////////////////////////////////////////////////////////////
 // OIL
 
@@ -354,9 +509,24 @@ typedef struct _oil_state_t
 	bitset_t unusedStates;
 	nfa_t* nfa;
 	bool noRandomSort;
-	bool skipBestSearch;
+	bool skipSearchBest;
+	state_t states;
 	state_t statesAddedBegin;
+	size_t posIndex;
+	int mergeCounter;
 } oil_state_t;
+
+void random_shuffle(state_t* buffer, state_t len)
+{
+	for(state_t i = len-1; i>0; i--)
+	{
+		state_t j = rand() % (i+1);
+		// swap
+		state_t tmp = buffer[i];
+		buffer[i] = buffer[j];
+		buffer[j] = tmp;
+	}
+}
 
 // Agrega estados para asegurar que el automata puede reconocer
 // la secuencia suministrada
@@ -375,11 +545,10 @@ void coerce_match_sample(oil_state_t* state, const symbol_t* sample, size_t leng
 	// añadir una transicion por cada simbolo
 	for(const symbol_t* s=sample; s<sample+length; s++)
 	{
-		// TODO: Requiere inicializar unusedStates desde antes
 		bitset_iterator_t j = bitset_next(state->unusedStates, i);
-		nfa_add_transition_bsi(state->nfa, 
+		nfa_add_transition(state->nfa, 
 			state->randomIds[state->randomIdsUsed], // q0
-			j, // q1
+			bitset_element(j), // q1
 			*s // letter
 		);
 		state->randomIds[++state->randomIdsUsed] = bitset_element(j);
@@ -390,14 +559,97 @@ void coerce_match_sample(oil_state_t* state, const symbol_t* sample, size_t leng
 	bitset_add_iterator(&state->nfa->finals, i);
 	state->randomIdsUsed++;
 	
+	state->states += length + 1;
 	assert(accept_sample(*state->nfa, sample, length));
 }
 
-// Realiza todas las mezclas de estados posibles
-// TODO: Mejorar esta descripcion
-void do_all_merges(oil_state_t* state)
+// Realiza todas las mezclas de estados que sean posibles. 
+// Solo se considera posible una mezcla de estados donde el NFA resultante 
+// reconoce las mismas muestras positivas tenidas en cuenta hasta el momento y
+// rechaza todas las muestras negativas disponibles.
+void do_all_merges(oil_state_t* state,
+		 const symbol_t* sample_buffer,
+		 const size_t sample_buffer_size,
+		 const size_t sample_length,
+		 const index_t* pindices, const size_t ip_size, 
+		 const index_t* nindices, const size_t in_size
+	)
 {
+	size_t nextPosSample = state->posIndex + 1;
+	if(!state->noRandomSort) 
+	{
+		state_t begin = state->statesAddedBegin;
+		state_t len = state->states - begin;
+		random_shuffle(state->randomIds + begin, len);
+	}
+
+	for(state_t i=state->statesAddedBegin; i<state->states; )
+	{
+		int bestScore = -1;
+		int bestJ = -1;
+		state_t s1 = state->randomIds[i];
+		nfa_t best_nfa;
+
+		for(state_t j=0; j<i; j++)
+		{
+			state_t s2 = state->randomIds[j];
+			nfa_t lnfa;
+			nfa_clone(&lnfa, state->nfa);
+			nfa_merge_states(&lnfa, s2, s1);
+			
+			bool anyNegMatch = accept_any_sample(lnfa,
+				sample_buffer, 
+				sample_buffer_size,
+				sample_length,				
+				nindices, in_size
+			);
+			if(anyNegMatch) continue;
+			
+			int score = accept_samples(lnfa,
+				sample_buffer,
+				sample_buffer_size,
+				sample_length,
+				&pindices[nextPosSample], // indices
+				ip_size - nextPosSample); // index buffer length
+				
+			if(score > bestScore) 
+			{
+				bestScore = score;
+				bestJ = j;
+				nfa_clone(&best_nfa, &lnfa);
+				if(state->skipSearchBest) continue;				
+			}
+		}
+		
+		// si se encontro mezcla exitosa
+		// eliminamos el estado eliminado del vector de estados aleatorio
+		if(bestScore != -1)
+		{
+			state->mergeCounter++;
+			if(state->noRandomSort)
+			{
+				memmove(state->randomIds + i, state->randomIds + i + 1,
+						state->states - state->statesAddedBegin);
+			}
+			else
+			{
+				state->randomIds[i] = state->randomIds[state->states-1];
+			}
+			state->states--;
+			nfa_clone(state->nfa, &best_nfa);	
+		}
+		else
+		{
+			i++;
+		}
+	}
 	
+	assert(!accept_any_sample(*state->nfa, 
+			sample_buffer, sample_buffer_size, sample_length,
+			nindices, in_size));
+	assert(accept_all_samples(*state->nfa,
+			sample_buffer, sample_buffer_size, sample_length,
+			pindices, state->posIndex+1));
 }
 
 // Algoritmo que obtiene un automata NFA que puede reconocer un conjunto de
@@ -405,29 +657,43 @@ void do_all_merges(oil_state_t* state)
 void oil(const symbol_t* sample_buffer, 
 		 const size_t sample_buffer_size,
 		 const size_t sample_length,
-		 const index_t* pindices, size_t ip_size, 
-		 const index_t* nindices, size_t in_size,
+		 const index_t* pindices, const size_t ip_size, 
+		 const index_t* nindices, const size_t in_size,
 		 nfa_t* nfa
-		 ) 
+		 )
 {
 	oil_state_t state;
 	state.nfa = nfa;
 	state.randomIdsSize = MAX_STATES;
 	state.randomIdsUsed = 0;
 	state.noRandomSort = false;
-	state.skipBestSearch = false;
+	state.skipSearchBest = false;
+	state.states = 0;
 	state.statesAddedBegin = 0;
+	state.mergeCounter = 0;
+	
+	// inicializa los estados no usados
 	bitset_clear(&state.unusedStates);
+	for(state_t t=0; t<MAX_STATES; t++)
+	{
+		bitset_add(&state.unusedStates, t);
+	}
 
 	nfa_clear(nfa);
 
-	for(size_t i=0; i<ip_size; i++)
+	for(state.posIndex=0; state.posIndex<ip_size; state.posIndex++)
 	{
-		const index_t pidx = pindices[i];
+		const index_t pidx = pindices[state.posIndex];
 		if(!accept_sample(*nfa, &sample_buffer[pidx], sample_length))
 		{
 			coerce_match_sample(&state, &sample_buffer[pidx], sample_length);
-			do_all_merges(&state);
+			do_all_merges(&state, 
+				sample_buffer, 
+				sample_buffer_size,
+				sample_length, 
+				pindices, ip_size,
+				nindices, in_size
+			);
 		}
 	}
 }
@@ -438,3 +704,4 @@ int main()
 	_conformance_check_nfa();
 	return 0;
 }
+
