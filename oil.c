@@ -16,6 +16,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <assert.h>
+#include <stdio.h>
 
 // Obtiene el maximo numero entero sin signo representable con el tipo de dato X
 #define MAX_OF_TYPE(X) ((1 << (8*sizeof(X))) - 1)
@@ -151,6 +152,15 @@ void bitset_add(bitset_t* set, bitset_element_index_t i)
 	assert(bucket < set->bucket_count);
 
 	set->buckets[bucket] |= (1 << bit);
+}
+
+// Agrega un rango de elementos al conjunto
+void bitset_add_range(bitset_t* set, bitset_element_index_t begin, bitset_element_index_t len)
+{	
+	while (len--)
+	{
+		bitset_add(set, begin++);
+	}
 }
 
 // Agrega un elemento indicado por un iterador
@@ -473,7 +483,7 @@ void nfa_merge_states(nfa_t* nfa, state_t q1, state_t q2)
 // NFA UTILS
 
 // Comprueba si el automata reconoce la secuencia suministrada
-bool accept_sample(const nfa_t* nfa, const symbol_t* sample, size_t length)
+bool nfa_accept_sample(const nfa_t* nfa, const symbol_t* sample, size_t length)
 {
 	bitset_t next;
 	bitset_t current;
@@ -507,7 +517,7 @@ bool accept_sample(const nfa_t* nfa, const symbol_t* sample, size_t length)
 }
 
 // Indica si e NFA acepta al menos una muestra
-bool accept_any_sample(const nfa_t* nfa,
+bool nfa_accept_any_sample(const nfa_t* nfa,
 	const symbol_t* sample_buffer,
 	const size_t sample_buffer_length,
 	const size_t sample_length,
@@ -516,7 +526,7 @@ bool accept_any_sample(const nfa_t* nfa,
 	for (size_t i = 0; i < i_size; i++)
 	{
 		assert(indices[i] < sample_buffer_length);
-		if (accept_sample(nfa, sample_buffer + indices[i], sample_length))
+		if (nfa_accept_sample(nfa, sample_buffer + indices[i], sample_length))
 		{
 			return true;
 		}
@@ -525,7 +535,7 @@ bool accept_any_sample(const nfa_t* nfa,
 }
 
 // Indica si el NFA acepta todas las muestras
-bool accept_all_samples(const nfa_t* nfa,
+bool nfa_accept_all_samples(const nfa_t* nfa,
 	const symbol_t* sample_buffer,
 	const size_t sample_buffer_length,
 	const size_t sample_length,
@@ -534,7 +544,7 @@ bool accept_all_samples(const nfa_t* nfa,
 	for (size_t i = 0; i < i_size; i++)
 	{
 		assert(indices[i] < sample_buffer_length);
-		if (!accept_sample(nfa, sample_buffer + indices[i], sample_length))
+		if (!nfa_accept_sample(nfa, sample_buffer + indices[i], sample_length))
 		{
 			return false;
 		}
@@ -543,7 +553,7 @@ bool accept_all_samples(const nfa_t* nfa,
 }
 
 // Indica cuantas muestras el NFA acepta
-int accept_samples(const nfa_t* nfa,
+int nfa_accept_samples(const nfa_t* nfa,
 	const symbol_t* sample_buffer,
 	const size_t sample_buffer_length,
 	const size_t sample_length,
@@ -553,7 +563,7 @@ int accept_samples(const nfa_t* nfa,
 	for (size_t i = 0; i < i_size; i++)
 	{
 		assert(indices[i] < sample_buffer_length);
-		if (accept_sample(nfa, sample_buffer + indices[i], sample_length))
+		if (nfa_accept_sample(nfa, sample_buffer + indices[i], sample_length))
 		{
 			c++;
 		}
@@ -561,6 +571,36 @@ int accept_samples(const nfa_t* nfa,
 	return c;
 }
 
+void nfa_print(const nfa_t* nfa)
+{
+	for (state_t q = 0; q < nfa_get_states(nfa); q++)
+	{
+		bool has_sucessors = false;
+		for (symbol_t a = 0; a < nfa_get_symbols(nfa); a++)
+		{
+			bitset_t suc;
+			nfa_get_sucessors(nfa, q, a, &suc);
+			has_sucessors = bitset_any(&suc);
+			if (has_sucessors) break;
+		}
+		if (!has_sucessors) continue;
+
+		printf("%u%s%s", q, nfa_is_initial(nfa, q) ? "I" : "", nfa_is_final(nfa, q) ? "F" : "");
+		for (symbol_t a = 0; a < nfa_get_symbols(nfa); a++)
+		{
+			printf(" |%u>", a);
+
+			bitset_t suc;
+			nfa_get_sucessors(nfa, q, a, &suc);
+			for (bitset_iterator_t qt = bitset_first(&suc); !bitset_end(qt); qt = bitset_next(&suc, qt))
+			{
+				printf("%u", bitset_element(qt));
+				if (!bitset_end(bitset_next(&suc, qt))) printf(", ");
+			}			
+		}
+		printf("\n");
+	}
+}
 
 /////////////////////////////////////////////////////////////////////////////
 // OIL
@@ -598,10 +638,14 @@ typedef struct _oil_state_t
 
 	// Contador de mezclas exitosas realizadas
 	int merge_counter;
+
+	bool print_merge_alternatives;
+	bool print_merges;
+	bool print_progress;
 } oil_state_t;
 
 // Aplica orden aleatorio a una secuencia de estados
-void random_shuffle(state_t* buffer, state_t len)
+void oil_random_shuffle(state_t* buffer, state_t len)
 {
 	for (state_t i = len - 1; i > 0; i--)
 	{
@@ -615,7 +659,7 @@ void random_shuffle(state_t* buffer, state_t len)
 
 // Agrega estados para asegurar que el automata puede reconocer
 // la secuencia suministrada
-void coerce_match_sample(oil_state_t* state, const symbol_t* sample, size_t length)
+void oil_coerce_match_sample(oil_state_t* state, const symbol_t* sample, size_t length)
 {
 	assert(state->states + length + 1 <= state->pool_size);
 
@@ -628,8 +672,7 @@ void coerce_match_sample(oil_state_t* state, const symbol_t* sample, size_t leng
 	nfa_add_initial(state->nfa, qi);	
 	*new_state++ = qi;
 	bitset_remove_iterator(&state->unused_states, i);
-
-
+	
 	// añadir una transicion por cada simbolo
 	for (const symbol_t* s = sample; s < sample + length; s++)
 	{
@@ -645,14 +688,14 @@ void coerce_match_sample(oil_state_t* state, const symbol_t* sample, size_t leng
 	nfa_add_final(state->nfa, qi);
 	
 	state->states += length + 1;
-	assert(accept_sample(state->nfa, sample, length));
+	assert(nfa_accept_sample(state->nfa, sample, length));
 }
 
 // Realiza todas las mezclas de estados que sean posibles. 
 // Solo se considera posible una mezcla de estados donde el NFA resultante 
 // reconoce las mismas muestras positivas tenidas en cuenta hasta el momento y
 // rechaza todas las muestras negativas disponibles.
-void do_all_merges(oil_state_t* state,
+void oil_do_all_merges(oil_state_t* state,
 	const symbol_t* sample_buffer,
 	const size_t sample_buffer_size,
 	const size_t sample_length,
@@ -660,18 +703,18 @@ void do_all_merges(oil_state_t* state,
 	const index_t* nindices, const size_t in_size
 	)
 {
-	size_t nextPosSample = state->sample_index + 1;
+	size_t next_sample_index = state->sample_index + 1;
 	if (!state->no_random_sort)
 	{
 		state_t begin = state->new_states_begin;
 		state_t len = state->states - begin;
-		random_shuffle(state->pool + begin, len);
+		oil_random_shuffle(state->pool + begin, len);
 	}
 
 	for (state_t i = state->new_states_begin; i < state->states;)
 	{
-		int bestScore = -1;
-		int bestJ = -1;
+		int best_score = -1;
+		int best_j = -1;
 		state_t s1 = state->pool[i];
 		nfa_t best_nfa;
 
@@ -682,7 +725,7 @@ void do_all_merges(oil_state_t* state,
 			nfa_clone(&lnfa, state->nfa);
 			nfa_merge_states(&lnfa, s2, s1);
 
-			bool anyNegMatch = accept_any_sample(&lnfa,
+			bool anyNegMatch = nfa_accept_any_sample(&lnfa,
 				sample_buffer,
 				sample_buffer_size,
 				sample_length,
@@ -690,27 +733,38 @@ void do_all_merges(oil_state_t* state,
 				);
 			if (anyNegMatch) continue;
 
-			int score = accept_samples(&lnfa,
+			int score = nfa_accept_samples(&lnfa,
 				sample_buffer,
 				sample_buffer_size,
 				sample_length,
-				&pindices[nextPosSample], // indices
-				ip_size - nextPosSample); // index buffer length
+				&pindices[next_sample_index], // indices
+				ip_size - next_sample_index); // index buffer length
 
-			if (score > bestScore)
+			if (score > best_score)
 			{
-				bestScore = score;
-				bestJ = j;
+				best_score = score;
+				best_j = j;
 				nfa_clone(&best_nfa, &lnfa);
 				if (state->skip_search_best) break;
+				if (state->print_merge_alternatives)
+				{
+					printf("merge alternative: %u %u (states: %u %u) [score: %d]\n", 
+						i, j, s1, s2, score);
+				}
 			}
 		}
 
 		// si se encontro mezcla exitosa
 		// eliminamos el estado eliminado del vector de estados aleatorio
-		if (bestScore != -1)
+		if (best_score != -1)
 		{
 			state->merge_counter++;
+			bitset_add(&state->unused_states, state->pool[i]);
+			if (state->print_merges)
+			{
+				printf("merge: %u %u (states %u %u) [score: %d]\n", 
+					i, best_j, s1, state->pool[i], best_score);
+			}
 			if (state->no_random_sort)
 			{
 				memmove(state->pool + i, state->pool + i + 1,
@@ -729,10 +783,10 @@ void do_all_merges(oil_state_t* state,
 		}
 	}
 
-	assert(!accept_any_sample(state->nfa,
+	assert(!nfa_accept_any_sample(state->nfa,
 		sample_buffer, sample_buffer_size, sample_length,
 		nindices, in_size));
-	assert(accept_all_samples(state->nfa,
+	assert(nfa_accept_all_samples(state->nfa,
 		sample_buffer, sample_buffer_size, sample_length,
 		pindices, state->sample_index + 1));
 }
@@ -757,28 +811,43 @@ void oil(const symbol_t* sample_buffer,
 	state.new_states_begin = 0;
 	state.merge_counter = 0;
 
+	// print debug info
+	state.print_merges = true;
+	state.print_progress = true;
+	state.print_merge_alternatives = true;
+
 	// inicializa los estados no usados
 	bitset_init(&state.unused_states);
-	for (state_t t = 0; t < MAX_STATES; t++)
-	{
-		bitset_add(&state.unused_states, t);
-	}
-
+	bitset_add_range(&state.unused_states, 0, MAX_STATES);
+	
 	nfa_init(nfa, symbols);
+
+	if (state.print_progress)
+	{
+		printf("oil start. sample_length: %u. ip_size: %u, in_size: %u, symbols: %u\n", 
+			sample_length, ip_size, in_size, symbols);
+	}
 
 	for (state.sample_index = 0; state.sample_index < ip_size; state.sample_index++)
 	{
 		const index_t pidx = pindices[state.sample_index];
-		if (!accept_sample(nfa, &sample_buffer[pidx], sample_length))
+		if (!nfa_accept_sample(nfa, &sample_buffer[pidx], sample_length))
 		{
-			coerce_match_sample(&state, &sample_buffer[pidx], sample_length);
-			do_all_merges(&state,
+			oil_coerce_match_sample(&state, &sample_buffer[pidx], sample_length);
+			oil_do_all_merges(&state,
 				sample_buffer,
 				sample_buffer_size,
 				sample_length,
 				pindices, ip_size,
 				nindices, in_size
 				);
+			if (state.print_progress)
+			{
+				printf("progress: %0.1f%% sample: %u/%u [states: %u]\n",
+					((state.sample_index+1)*100.0f/ip_size),
+					state.sample_index+1, ip_size,
+					state.states);
+			}
 		}
 	}
 }
@@ -801,6 +870,7 @@ void test(void)
 		pindices, psize, 
 		nindices, nsize, 
 		&nfa);
+	nfa_print(&nfa);
 }
 
 /////////////////////////////////////////////////////////////////////////////
