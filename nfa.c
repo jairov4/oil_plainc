@@ -15,6 +15,7 @@
 #include "util.h"
 #include "nfa.h"
 #include <assert.h>
+#include <stdio.h>
 
 void _conformance_check_nfa(void)
 {
