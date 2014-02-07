@@ -2,19 +2,22 @@
 
 SOURCE_DIR = ./
 
-LLVM_HOME_DIR = /home/legup/legup-3.0/llvm/Release+Asserts/bin/
+LEGUP_HOME_DIR=/home/legup/legup-3.0/
+LLVM_HOME_DIR = $(LEGUP_HOME_DIR)llvm/Release+Asserts/bin/
 FRONT_END = clang
 LEGUP_LIB_DIR = /home/legup/legup-3.0/examples/lib/
 # fix for some Ubuntu distros
 CFLAGS = -I/usr/include/i386-linux-gnu/
 LDFLAGS = 
-OPT_FLAGS = -load=$(LLVM_HOME_DIR)../lib/LLVMLegUp.so -legup-config=$(SOURCE_DIR)legup.tcl
+LEGUP_CONFIG = -legup-config=$(LEGUP_HOME_DIR)hwtest/CycloneII.tcl -legup-config=$(SOURCE_DIR)legup.tcl
+OPT_FLAGS = -load=$(LLVM_HOME_DIR)../lib/LLVMLegUp.so $(LEGUP_CONFIG)
+LLC_FLAGS = $(LEGUP_CONFIG)
 
-OBJS = oil.prelto.2.bc
+OBJS = nfa.prelto.2.bc
 
 ### RULES
 
-all: oil.v
+all: nfa.v
 
 # first compilation
 %.prelto.1.bc : $(SOURCE_DIR)%.c
@@ -57,7 +60,7 @@ clean:
 	rm -f *.postlto.bc 
 	rm -f *.bc 
 	rm -f *.ll
-	rm -f *.o
+	rm -f *.o *.rpt *.dot *.mif *.tex a.out
 
 .PHONY: all
 
