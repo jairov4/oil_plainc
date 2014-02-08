@@ -41,8 +41,11 @@ endif
 %.prelto.bc : %.prelto.linked.bc
 	$(LLVM_HOME_DIR)opt $(OPT_FLAGS) -legup-prelto < $< > $@
 
-%.postlto.bc : %.prelto.bc
+%.postlto.1.bc : %.prelto.bc
 	$(LLVM_HOME_DIR)llvm-ld $(LDFLAG) $< $(LEGUP_LIB_DIR)llvm/liblegup.a $(LEGUP_LIB_DIR)llvm/libm.a -b=$@
+	
+%.postlto.bc : %.postlto.1.bc
+	$(LLVM_HOME_DIR)opt $(OPT_FLAGS) -basicaa -polly-cloog -analyze -q -polly-analyze-ir < $< > $@
 	
 %.bc : %.postlto.bc
 	$(LLVM_HOME_DIR)opt $(OPT_FLAGS) -basicaa -loop-simplify -modulo-schedule < $< > $@

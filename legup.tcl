@@ -115,7 +115,7 @@ set_parameter MB_MINIMIZE_HW 0
 # set the clock period constraint.
 # WARNING: This gets overriden by the environment variable LEGUP_SDC_PERIOD in
 # Makefile.config based on the target family. 
-#set_parameter SDC_PERIOD 15
+set_parameter SDC_PERIOD 15
 
 # Disable chaining of operations in a clock cycle. This will achieve the
 # maximum amount of pipelining. 
@@ -185,4 +185,4 @@ set_parameter ALIAS_ANALYSIS 1
 #loop_pipeline "loop2" -ii 1
 
 # turn off all loop pipelining
-#set_parameter NO_LOOP_PIPELINING 1
+set_parameter NO_LOOP_PIPELINING 1
