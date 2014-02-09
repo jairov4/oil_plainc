@@ -201,10 +201,10 @@ void nfa_merge_states(nfa_t* nfa, state_t q1, state_t q2)
 		}
 
 		nfa_get_sucessors(nfa, q2, c, &bs);
-		for (bitset_iterator_t i = bitset_first(&bs); !bitset_end(i); i = bitset_next(&bs, i))
+		for (bitset_iterator_t j = bitset_first(&bs); !bitset_end(j); j = bitset_next(&bs, j))
 		{
-			nfa_add_transition(nfa, q1, bitset_element(i), c);
-			nfa_remove_transition(nfa, q2, bitset_element(i), c);
+			nfa_add_transition(nfa, q1, bitset_element(j), c);
+			nfa_remove_transition(nfa, q2, bitset_element(j), c);
 		}
 	}
 }
@@ -213,7 +213,7 @@ void nfa_merge_states(nfa_t* nfa, state_t q1, state_t q2)
 // NFA UTILS
 
 // Comprueba si el automata reconoce la secuencia suministrada
-bool nfa_accept_sample(const nfa_t* nfa, const symbol_t* sample, size_t length)
+bool nfa_accept_sample(const nfa_t* nfa, const symbol_t sample[100], size_t length)
 {
 	bitset_t next;
 	bitset_t current;
@@ -221,12 +221,16 @@ bool nfa_accept_sample(const nfa_t* nfa, const symbol_t* sample, size_t length)
 
 	bitset_init(&next);
 	nfa_get_initials(nfa, &current);
+
+nfa_accept_sample_1_sym:
 	for (size_t i = 0; i < length; i++)
 	{
 		symbol_t sym = *sample++;
 		bitset_clear(&next);
 		bool any = false;
 		bitset_iterator_t j;
+
+nfa_accept_sample_2_bsf:
 		for (j = bitset_first(&current); !bitset_end(j); j = bitset_next(&current, j))
 		{
 			state_t state = bitset_element(j);
@@ -316,12 +320,12 @@ void nfa_print(const nfa_t* nfa)
 		if (!has_sucessors) continue;
 
 		printf("%u%s%s", q, nfa_is_initial(nfa, q) ? "I" : "", nfa_is_final(nfa, q) ? "F" : "");
-		for (symbol_t a = 0; a < nfa_get_symbols(nfa); a++)
+		for (symbol_t b = 0; b < nfa_get_symbols(nfa); b++)
 		{
-			printf(" |%u>", a);
+			printf(" |%u>", b);
 
 			bitset_t suc;
-			nfa_get_sucessors(nfa, q, a, &suc);
+			nfa_get_sucessors(nfa, q, b, &suc);
 			for (bitset_iterator_t qt = bitset_first(&suc); !bitset_end(qt); qt = bitset_next(&suc, qt))
 			{
 				printf("%u", bitset_element(qt));

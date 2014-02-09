@@ -241,7 +241,7 @@ void oil(const symbol_t* sample_buffer,
 
 	if (state.print_progress)
 	{
-		printf("oil start. sample_length: %u. ip_size: %u, in_size: %u, symbols: %u\n", 
+		printf("oil start. sample_length: %llu. ip_size: %llu, in_size: %llu, symbols: %hhu\n",
 			sample_length, ip_size, in_size, symbols);
 	}
 
@@ -260,7 +260,7 @@ void oil(const symbol_t* sample_buffer,
 				);
 			if (state.print_progress)
 			{
-				printf("progress: %0.1f%% sample: %u/%u [states: %u]\n",
+				printf("progress: %0.1f%% sample: %llu/%llu [states: %u]\n",
 					((state.sample_index+1)*100.0f/ip_size),
 					state.sample_index+1, ip_size,
 					state.states);

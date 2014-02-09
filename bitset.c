@@ -28,9 +28,10 @@ void bitset_clear(bitset_t* set)
 {
 	assert(set->bucket_count <= MAX_BUCKETS);
 
-	for (size_t i = 0; i < set->bucket_count; i++)
+bs_clear_bucket:
+	for (size_t i = 0; i < MAX_BUCKETS; i++)
 	{
-		set->buckets[i] = 0;
+		if(i < set->bucket_count) set->buckets[i] = 0;
 	}
 }
 
@@ -114,9 +115,10 @@ void bitset_union(bitset_t* ra, const bitset_t* b)
 {
 	assert(ra->bucket_count == b->bucket_count);
 
-	for (bucket_index_t i = 0; i < ra->bucket_count; i++)
+bs_union_bucket:
+	for (bucket_index_t i = 0; i < MAX_BUCKETS; i++)
 	{
-		ra->buckets[i] |= b->buckets[i];
+		if(i < ra->bucket_count) ra->buckets[i] |= b->buckets[i];
 	}
 }
 
@@ -125,18 +127,20 @@ void bitset_intersect(bitset_t* ra, const bitset_t* b)
 {
 	assert(ra->bucket_count == b->bucket_count);
 
-	for (bucket_index_t i = 0; i < ra->bucket_count; i++)
+bs_intersect_bucket:
+	for (bucket_index_t i = 0; i < MAX_BUCKETS; i++)
 	{
-		ra->buckets[i] &= b->buckets[i];
+		if(i < ra->bucket_count) ra->buckets[i] &= b->buckets[i];
 	}
 }
 
 // Comprueba si existe al menos un elemento en el conjunto
 bool bitset_any(const bitset_t* set)
 {
-	for (bucket_index_t i = 0; i < set->bucket_count; i++)
+bs_any_bucket:
+	for (bucket_index_t i = 0; i < MAX_BUCKETS; i++)
 	{
-		if (set->buckets[i]) return true;
+		if (i < set->bucket_count && set->buckets[i]) return true;
 	}
 	return false;
 }
@@ -154,9 +158,14 @@ bitset_iterator_t bitset_first(const bitset_t* set)
 {
 	bitset_iterator_t r;
 	r.end = false;
-	for (r.bucket = 0; r.bucket < set->bucket_count; r.bucket++)
+
+bs_first_bucket:
+	for (r.bucket = 0; r.bucket < MAX_BUCKETS; r.bucket++)
 	{
+		if(!(r.bucket < set->bucket_count)) continue;
 		bucket_t b = set->buckets[r.bucket];
+
+bs_first_bit:
 		for (r.bit = 0; r.bit < sizeof(bucket_t)* 8; r.bit++)
 		{
 			bucket_t t = b >> r.bit;
@@ -174,15 +183,19 @@ bitset_iterator_t bitset_next(const bitset_t* set, bitset_iterator_t r)
 	assert(r.bit < sizeof(bucket_t)* 8);
 	assert(r.bucket < set->bucket_count);
 
-	for (r.bit++; r.bit < sizeof(bucket_t)* 8; r.bit++)
+bs_next_1_bit: for (bucket_bit_index_t bt=0; bt < BITS_OF_TYPE(bucket_t); bt++)
 	{
-		bucket_t b = set->buckets[r.bucket] >> r.bit;
+		if(bt < r.bit + 1) continue;
+		bucket_t b = set->buckets[r.bucket] >> bt;
 		if (b & 1) return r;
 	}
 
-	for (r.bucket++; r.bucket < set->bucket_count; r.bucket++)
+bs_next_2_bucket: for (bucket_index_t bucket=0; bucket < MAX_BUCKETS; bucket++)
 	{
-		for (r.bit = 0; r.bit < sizeof(bucket_t)* 8; r.bit++)
+		if(bucket < r.bucket + 1) continue;
+		if(!(bucket < set->bucket_count)) continue;
+
+bs_next_2_bit: for (r.bit = 0; r.bit < sizeof(bucket_t)* 8; r.bit++)
 		{
 			bucket_t b = set->buckets[r.bucket] >> r.bit;
 			if (b & 1) return r;
