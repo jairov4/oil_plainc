@@ -45,14 +45,14 @@ typedef uint8_t bitset_element_index_t;
 typedef struct _bitset_t
 {
 	bucket_t buckets[MAX_BUCKETS];
-	bucket_index_t bucket_count;
 } bitset_t;
 
 // Iterador para elementos en un conjunto
 typedef struct _bitset_iterator_t
 {
 	bucket_bit_index_t bit;
-	bucket_index_t bucket;
+	bucket_index_t bucket_index;
+	bucket_t bucket;
 	bool end;
 } bitset_iterator_t;
 
@@ -102,4 +102,3 @@ bitset_iterator_t bitset_next(const bitset_t* set, bitset_iterator_t r);
 
 // Comprueba si un iterador ya rebaso el final del conjunto
 bool bitset_end(bitset_iterator_t r);
-

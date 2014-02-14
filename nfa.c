@@ -118,7 +118,9 @@ void nfa_init(nfa_t* nfa, symbol_t symbols)
 	bitset_init(&nfa->initials);
 	bitset_init(&nfa->finals);
 	nfa->symbols = symbols;
-	for (size_t i = 0; i < symbols*MAX_STATES; i++)
+
+	size_t i;
+	for (i = 0; i < symbols*MAX_STATES; i++)
 	{
 		bitset_init(&nfa->forward[i]);
 		bitset_init(&nfa->backward[i]);
@@ -189,19 +191,22 @@ void nfa_merge_states(nfa_t* nfa, state_t q1, state_t q2)
 		nfa_add_final(nfa, q1);
 		nfa_remove_final(nfa, q2);
 	}
-	for (symbol_t c = 0; c < nfa->symbols; c++)
+	symbol_t c;
+	for (c = 0; c < nfa->symbols; c++)
 	{
 		bitset_t bs;
 
 		nfa_get_predecessors(nfa, q2, c, &bs);
-		for (bitset_iterator_t i = bitset_first(&bs); !bitset_end(i); i = bitset_next(&bs, i))
+		bitset_iterator_t i;
+		for (i = bitset_first(&bs); !bitset_end(i); i = bitset_next(&bs, i))
 		{
 			nfa_add_transition(nfa, bitset_element(i), q1, c);
 			nfa_remove_transition(nfa, bitset_element(i), q2, c);
 		}
 
 		nfa_get_sucessors(nfa, q2, c, &bs);
-		for (bitset_iterator_t j = bitset_first(&bs); !bitset_end(j); j = bitset_next(&bs, j))
+		bitset_iterator_t j;
+		for (j = bitset_first(&bs); !bitset_end(j); j = bitset_next(&bs, j))
 		{
 			nfa_add_transition(nfa, q1, bitset_element(j), c);
 			nfa_remove_transition(nfa, q2, bitset_element(j), c);
@@ -212,9 +217,52 @@ void nfa_merge_states(nfa_t* nfa, state_t q1, state_t q2)
 /////////////////////////////////////////////////////////////////////////////
 // NFA UTILS
 
-// Comprueba si el automata reconoce la secuencia suministrada
-bool nfa_accept_sample(const nfa_t* nfa, const symbol_t sample[100], size_t length)
+sample_iterator_t sample_iterator_begin(void)
 {
+	sample_iterator_t r;
+	r.index = 0;
+	r.sample = 0;
+	return r;
+}
+
+sample_iterator_t sample_iterator_end(uint16_t length)
+{
+	sample_iterator_t r;
+	r.index = length;
+	r.sample = 0;
+	return r;
+}
+
+sample_iterator_t sample_iterator_next(const index_t indices[MAX_INDICES],
+		sample_iterator_t i)
+{
+	if(i.sample < indices[i.index].samples - 1)
+	{
+		i.sample++;
+	} else {
+		i.index++;
+		i.sample = 0;
+	}
+	return i;
+}
+
+bool sample_iterator_equals(sample_iterator_t a, sample_iterator_t b)
+{
+	return (a.sample == b.sample) && (a.index == b.index);
+}
+
+// Comprueba si el automata reconoce la secuencia suministrada
+bool nfa_accept_sample(const nfa_t* nfa,
+	const symbol_t sample[MAX_SAMPLE_LENGTH],
+	uint16_t length)
+{
+#pragma HLS ARRAY_MAP variable=nfa->initials instance=initials_finals horizontal
+#pragma HLS ARRAY_MAP variable=nfa->finals instance=initials_finals horizontal
+#pragma HLS RESOURCE variable=nfa->initials core=ROM_1P
+#pragma HLS RESOURCE variable=nfa->finals core=ROM_1P
+#pragma HLS INTERFACE ap_bus port=nfa->forward
+#pragma HLS INTERFACE ap_fifo port=sample
+
 	bitset_t next;
 	bitset_t current;
 	bitset_t tmp;
@@ -222,14 +270,15 @@ bool nfa_accept_sample(const nfa_t* nfa, const symbol_t sample[100], size_t leng
 	bitset_init(&next);
 	nfa_get_initials(nfa, &current);
 
+	uint16_t i;
 nfa_accept_sample_1_sym:
-	for (size_t i = 0; i < length; i++)
+	for (i = 0; i < length; i++)
 	{
-		symbol_t sym = *sample++;
+		symbol_t sym = sample[i];
 		bitset_clear(&next);
 		bool any = false;
-		bitset_iterator_t j;
 
+		bitset_iterator_t j;
 nfa_accept_sample_2_bsf:
 		for (j = bitset_first(&current); !bitset_end(j); j = bitset_next(&current, j))
 		{
@@ -252,15 +301,18 @@ nfa_accept_sample_2_bsf:
 
 // Indica si e NFA acepta al menos una muestra
 bool nfa_accept_any_sample(const nfa_t* nfa,
-	const symbol_t* sample_buffer,
-	const size_t sample_buffer_length,
-	const size_t sample_length,
-	const index_t* indices, const size_t i_size)
+	const symbol_t sample_buffer[MAX_SAMPLE_BUFFER],
+	const uint32_t sample_buffer_length,
+	const uint16_t sample_length,
+	const index_t indices[MAX_INDICES], const uint16_t i_size,
+	sample_iterator_t begin, sample_iterator_t end)
 {
-	for (size_t i = 0; i < i_size; i++)
+	sample_iterator_t i;
+	for(i = begin; !sample_iterator_equals(i, end); i = sample_iterator_next(indices, i))
 	{
-		assert(indices[i] < sample_buffer_length);
-		if (nfa_accept_sample(nfa, sample_buffer + indices[i], sample_length))
+		index_t desc = indices[i.index];
+		uint32_t offset = desc.stride * i.sample;
+		if (nfa_accept_sample(nfa, sample_buffer + offset, sample_length))
 		{
 			return true;
 		}
@@ -268,17 +320,71 @@ bool nfa_accept_any_sample(const nfa_t* nfa,
 	return false;
 }
 
+#define UNITS 1024
+int nfa_accept_samples_generic_hw(const nfa_t* nfa,
+	const symbol_t sample_buffer[MAX_SAMPLE_BUFFER],
+	const uint32_t sample_buffer_length,
+	const uint16_t sample_length,
+	const uint32_t offset[UNITS],
+	int samples,
+	bool stop_on_first, bool accept)
+{
+#pragma HLS RESOURCE variable=nfa core=ROM_1P
+#pragma HLS INTERFACE ap_bus port=nfa->forward
+	int i;
+	int c = 0;
+	for(i=0; i<samples; i++)
+	{
+		uint32_t begin = offset[i];
+		bool r = nfa_accept_sample(nfa, sample_buffer + begin, sample_length);
+		if((r && accept) || (!r && !accept))
+		{
+			if(stop_on_first) return 1;
+			c++;
+		}
+	}
+	return c;
+}
+
+
+int nfa_accept_samples_generic(const nfa_t* nfa,
+	const symbol_t sample_buffer[MAX_SAMPLE_BUFFER],
+	const uint32_t sample_buffer_length,
+	const uint16_t sample_length,
+	const index_t indices[MAX_INDICES], const uint16_t i_size,
+	sample_iterator_t begin, sample_iterator_t end,
+	bool stop_on_first, bool accept)
+{
+	int c = 0;
+	sample_iterator_t i;
+	for(i = begin; !sample_iterator_equals(i,end); i = sample_iterator_next(indices, i))
+	{
+		index_t desc = indices[i.index];
+		uint32_t offset = desc.stride * i.sample;
+		bool r = nfa_accept_sample(nfa, sample_buffer + offset, sample_length);
+		if((r && accept) || (!r && !accept))
+		{
+			c++;
+			if(stop_on_first) break;
+		}
+	}
+	return c;
+}
+
 // Indica si el NFA acepta todas las muestras
 bool nfa_accept_all_samples(const nfa_t* nfa,
-	const symbol_t* sample_buffer,
-	const size_t sample_buffer_length,
-	const size_t sample_length,
-	const index_t* indices, const size_t i_size)
+	const symbol_t sample_buffer[MAX_SAMPLE_BUFFER],
+	const uint32_t sample_buffer_length,
+	const uint16_t sample_length,
+	const index_t indices[MAX_INDICES], const uint16_t i_size,
+	sample_iterator_t begin, sample_iterator_t end)
 {
-	for (size_t i = 0; i < i_size; i++)
+	sample_iterator_t i;
+	for(i = begin; !sample_iterator_equals(i, end); i = sample_iterator_next(indices, i))
 	{
-		assert(indices[i] < sample_buffer_length);
-		if (!nfa_accept_sample(nfa, sample_buffer + indices[i], sample_length))
+		index_t desc = indices[i.index];
+		uint32_t offset = desc.stride * i.sample;
+		if (!nfa_accept_sample(nfa, sample_buffer + offset, sample_length))
 		{
 			return false;
 		}
@@ -288,16 +394,19 @@ bool nfa_accept_all_samples(const nfa_t* nfa,
 
 // Indica cuantas muestras el NFA acepta
 int nfa_accept_samples(const nfa_t* nfa,
-	const symbol_t* sample_buffer,
-	const size_t sample_buffer_length,
-	const size_t sample_length,
-	const index_t* indices, const size_t i_size)
+	const symbol_t sample_buffer[MAX_SAMPLE_BUFFER],
+	const uint32_t sample_buffer_length,
+	const uint16_t sample_length,
+	const index_t indices[MAX_INDICES], const uint16_t i_size,
+	sample_iterator_t begin, sample_iterator_t end)
 {
 	int c = 0;
-	for (size_t i = 0; i < i_size; i++)
+	sample_iterator_t i;
+	for(i = begin; !sample_iterator_equals(i, end); i = sample_iterator_next(indices, i))
 	{
-		assert(indices[i] < sample_buffer_length);
-		if (nfa_accept_sample(nfa, sample_buffer + indices[i], sample_length))
+		index_t desc = indices[i.index];
+		uint32_t offset = desc.stride * i.sample;
+		if (!nfa_accept_sample(nfa, sample_buffer + offset, sample_length))
 		{
 			c++;
 		}
@@ -307,10 +416,12 @@ int nfa_accept_samples(const nfa_t* nfa,
 
 void nfa_print(const nfa_t* nfa)
 {
-	for (state_t q = 0; q < nfa_get_states(nfa); q++)
+	state_t q;
+	for (q = 0; q < nfa_get_states(nfa); q++)
 	{
 		bool has_sucessors = false;
-		for (symbol_t a = 0; a < nfa_get_symbols(nfa); a++)
+		symbol_t a;
+		for (a = 0; a < nfa_get_symbols(nfa); a++)
 		{
 			bitset_t suc;
 			nfa_get_sucessors(nfa, q, a, &suc);
@@ -320,13 +431,15 @@ void nfa_print(const nfa_t* nfa)
 		if (!has_sucessors) continue;
 
 		printf("%u%s%s", q, nfa_is_initial(nfa, q) ? "I" : "", nfa_is_final(nfa, q) ? "F" : "");
-		for (symbol_t b = 0; b < nfa_get_symbols(nfa); b++)
+		symbol_t b;
+		for (b = 0; b < nfa_get_symbols(nfa); b++)
 		{
 			printf(" |%u>", b);
 
 			bitset_t suc;
 			nfa_get_sucessors(nfa, q, b, &suc);
-			for (bitset_iterator_t qt = bitset_first(&suc); !bitset_end(qt); qt = bitset_next(&suc, qt))
+			bitset_iterator_t qt;
+			for (qt = bitset_first(&suc); !bitset_end(qt); qt = bitset_next(&suc, qt))
 			{
 				printf("%u", bitset_element(qt));
 				if (!bitset_end(bitset_next(&suc, qt))) printf(", ");

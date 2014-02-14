@@ -50,8 +50,8 @@ typedef struct _oil_state_t
 	// los nuevos estados a ser combinados
 	state_t new_states_begin;
 
-	// Indice de la muestra positiva en la que se encuentra el procesamiento
-	size_t sample_index;
+	// muestra positiva en la que se encuentra el procesamiento
+	sample_iterator_t current_sample;
 
 	// Contador de mezclas exitosas realizadas
 	int merge_counter;
@@ -64,7 +64,8 @@ typedef struct _oil_state_t
 // Aplica orden aleatorio a una secuencia de estados
 void oil_random_shuffle(state_t* buffer, state_t len)
 {
-	for (state_t i = len - 1; i > 0; i--)
+	state_t i;
+	for (i=len-1; i>0; i--)
 	{
 		state_t j = rand() % (i + 1);
 		// swap
@@ -91,7 +92,8 @@ void oil_coerce_match_sample(oil_state_t* state, const symbol_t* sample, size_t 
 	bitset_remove_iterator(&state->unused_states, i);
 	
 	// añadir una transicion por cada simbolo
-	for (const symbol_t* s = sample; s < sample + length; s++)
+	const symbol_t* s;
+	for (s = sample; s < sample + length; s++)
 	{
 		bitset_iterator_t j = bitset_next(&state->unused_states, i);
 		bitset_remove_iterator(&state->unused_states, j);		
@@ -120,33 +122,35 @@ void oil_do_all_merges(oil_state_t* state,
 	const index_t* nindices, const size_t in_size
 	)
 {
-	size_t next_sample_index = state->sample_index + 1;
+	sample_iterator_t next_sample = sample_iterator_next(pindices, state->current_sample);
 	if (!state->no_random_sort)
 	{
 		state_t begin = state->new_states_begin;
 		state_t len = state->states - begin;
 		oil_random_shuffle(state->pool + begin, len);
 	}
-
-	for (state_t i = state->new_states_begin; i < state->states;)
+	state_t i;
+	for (i = state->new_states_begin; i < state->states;)
 	{
 		int best_score = -1;
 		int best_j = -1;
 		state_t s1 = state->pool[i];
 		nfa_t best_nfa;
-
-		for (state_t j = 0; j < i; j++)
+		state_t j;
+		for (j = 0; j < i; j++)
 		{
 			state_t s2 = state->pool[j];
 			nfa_t lnfa;
 			nfa_clone(&lnfa, state->nfa);
 			nfa_merge_states(&lnfa, s2, s1);
-
 			bool anyNegMatch = nfa_accept_any_sample(&lnfa,
 				sample_buffer,
 				sample_buffer_size,
 				sample_length,
-				nindices, in_size
+				nindices, // indices
+				in_size, // length buffer
+				sample_iterator_begin(), // begin
+				sample_iterator_end(in_size) // end
 				);
 			if (anyNegMatch) continue;
 
@@ -154,8 +158,10 @@ void oil_do_all_merges(oil_state_t* state,
 				sample_buffer,
 				sample_buffer_size,
 				sample_length,
-				&pindices[next_sample_index], // indices
-				ip_size - next_sample_index); // index buffer length
+				pindices, // indices
+				ip_size, // index buffer length
+				next_sample, // begin
+				sample_iterator_end(ip_size)); // end
 
 			if (score > best_score)
 			{
@@ -202,10 +208,12 @@ void oil_do_all_merges(oil_state_t* state,
 
 	assert(!nfa_accept_any_sample(state->nfa,
 		sample_buffer, sample_buffer_size, sample_length,
-		nindices, in_size));
+		nindices, in_size,
+		sample_iterator_begin(), sample_iterator_end(in_size)));
 	assert(nfa_accept_all_samples(state->nfa,
 		sample_buffer, sample_buffer_size, sample_length,
-		pindices, state->sample_index + 1));
+		pindices, ip_size,
+		sample_iterator_begin(), next_sample));
 }
 
 // Algoritmo que obtiene un automata NFA que puede reconocer un conjunto de
@@ -239,18 +247,31 @@ void oil(const symbol_t* sample_buffer,
 	
 	nfa_init(nfa, symbols);
 
-	if (state.print_progress)
+	int total_samples;
+	int current_sample;
+	if(state.print_progress)
 	{
+		total_samples = 0;
+		current_sample = 0;
+		for(uint16_t i=0; i<ip_size; i++)
+		{
+			total_samples += pindices[i].samples;
+		}
+		printf("%d total positive samples\n", total_samples);
 		printf("oil start. sample_length: %llu. ip_size: %llu, in_size: %llu, symbols: %hhu\n",
 			sample_length, ip_size, in_size, symbols);
 	}
 
-	for (state.sample_index = 0; state.sample_index < ip_size; state.sample_index++)
+	// ciclo para cada una de las muestras positivas
+	for (state.current_sample = sample_iterator_begin();
+		!sample_iterator_equals(state.current_sample, sample_iterator_end(ip_size));
+		state.current_sample = sample_iterator_next(pindices, state.current_sample))
 	{
-		const index_t pidx = pindices[state.sample_index];
-		if (!nfa_accept_sample(nfa, &sample_buffer[pidx], sample_length))
+		index_t desc = pindices[state.current_sample.index];
+		uint32_t offset = desc.begin + state.current_sample.sample * desc.stride;
+		if (!nfa_accept_sample(nfa, &sample_buffer[offset], sample_length))
 		{
-			oil_coerce_match_sample(&state, &sample_buffer[pidx], sample_length);
+			oil_coerce_match_sample(&state, &sample_buffer[offset], sample_length);
 			oil_do_all_merges(&state,
 				sample_buffer,
 				sample_buffer_size,
@@ -260,9 +281,10 @@ void oil(const symbol_t* sample_buffer,
 				);
 			if (state.print_progress)
 			{
+				current_sample++;
 				printf("progress: %0.1f%% sample: %llu/%llu [states: %u]\n",
-					((state.sample_index+1)*100.0f/ip_size),
-					state.sample_index+1, ip_size,
+					(current_sample*100.0f/total_samples),
+					current_sample, total_samples,
 					state.states);
 			}
 		}
